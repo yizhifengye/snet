@@ -22,7 +22,7 @@ func main() {
 
 	// Connect to server
 	conn, err := snet.Dial(config, func() (net.Conn, error) {
-		return net.Dial("tcp", "localhost:8080")
+		return net.Dial("tcp", "localhost:8081")
 	})
 	if err != nil {
 		log.Fatalf("Failed to connect to server: %v", err)
