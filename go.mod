@@ -1,6 +1,6 @@
 module github.com/yizhifengye/snet
 
-go 1.23.10
+go 1.23
 
 require (
 	github.com/funny/crypto v0.0.0-20161011085906-d0152d76d92a
