@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	snet "snet/go"
+	snet "github.com/yizhifengye/snet/go"
 )
 
 func main() {

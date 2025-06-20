@@ -1,4 +1,4 @@
-module snet
+module github.com/yizhifengye/snet
 
 go 1.23.10
 
