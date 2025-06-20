@@ -8,28 +8,17 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	snet "snet/go"
 )
 
 func main() {
-	config := snet.Config{
-		EnableCrypt:        false, // Must match server settings
-		HandshakeTimeout:   time.Second * 10,
-		RewriterBufferSize: 1024,
-		ReconnWaitTimeout:  time.Second * 30,
-	}
-
-	// Connect to server
-	conn, err := snet.Dial(config, func() (net.Conn, error) {
-		return net.Dial("tcp", "localhost:8080")
-	})
+	// Connect directly to server using plain TCP
+	conn, err := net.Dial("tcp", "localhost:8080")
 	if err != nil {
 		log.Fatalf("Failed to connect to server: %v", err)
 	}
 	defer conn.Close()
 
-	fmt.Println("Successfully connected to SNET server")
+	fmt.Println("Successfully connected to server using plain TCP")
 	fmt.Printf("Local address: %s\n", conn.LocalAddr().String())
 	fmt.Printf("Server address: %s\n", conn.RemoteAddr().String())
 
@@ -37,7 +26,7 @@ func main() {
 	writer := bufio.NewWriter(conn)
 	scanner := bufio.NewScanner(os.Stdin)
 
-	// Start goroutine to receive messages
+	// Start goroutine to receive messages from server
 	go func() {
 		for {
 			message, err := reader.ReadString('\n')
@@ -49,6 +38,7 @@ func main() {
 		}
 	}()
 
+	fmt.Println("This is a plain TCP client for testing SNET server compatibility")
 	fmt.Println("Enter messages to send to server (type 'quit' to exit):")
 
 	// Message sending loop
@@ -63,7 +53,7 @@ func main() {
 			continue
 		}
 
-		// Send message
+		// Send message directly as plain text
 		_, err := writer.WriteString(message + "\n")
 		if err != nil {
 			fmt.Printf("Failed to send message: %v\n", err)
@@ -79,5 +69,5 @@ func main() {
 		}
 	}
 
-	fmt.Println("Client exiting")
+	fmt.Println("TCP client exiting")
 }
