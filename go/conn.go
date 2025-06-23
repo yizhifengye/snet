@@ -190,6 +190,16 @@ func (c *Conn) Close() error {
 	return c.base.Close()
 }
 
+// ID returns the connection ID
+func (c *Conn) ID() uint64 {
+	return c.id
+}
+
+// CloseChan returns the close channel
+func (c *Conn) CloseChan() <-chan struct{} {
+	return c.closeChan
+}
+
 func (c *Conn) TryReconn() {
 	if c.listener == nil {
 		c.reconnMutex.RLock()
