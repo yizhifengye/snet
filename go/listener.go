@@ -1,6 +1,7 @@
 package snet
 
 import (
+	"fmt"
 	"bytes"
 	"crypto/md5"
 	"crypto/rand"
@@ -116,9 +117,10 @@ func (l *Listener) handAccept(conn net.Conn) {
 	}
 }
 
-func (l *Listener) handshake(conn net.Conn) {
-	if l.config.HandshakeTimeout > 0 {
-		conn.SetDeadline(time.Now().Add(l.config.HandshakeTimeout))
+// AcceptOnConn 接受一个已建立的连接，并进行握手
+func AcceptOnConn(conn net.Conn, config Config, generateConnID func() uint64) (*Conn, error) {
+	if config.HandshakeTimeout > 0 {
+		conn.SetDeadline(time.Now().Add(config.HandshakeTimeout))
 		defer conn.SetDeadline(time.Time{})
 	}
 
@@ -131,26 +133,23 @@ func (l *Listener) handshake(conn net.Conn) {
 	// 读取客户端公钥
 	if _, err := io.ReadFull(conn, field1); err != nil {
 		conn.Close()
-		return
+		return nil, err
 	}
 
-	l.trace("new conn")
 	connPubKey := binary.LittleEndian.Uint64(field1)
 	if connPubKey == 0 {
-		l.trace("zero public key")
 		conn.Close()
-		return
+		return nil, fmt.Errorf("zero public key")
 	}
 
 	privKey, pubKey := dh64.KeyPair()
 	secret := dh64.Secret(privKey, connPubKey)
 
-	connID := atomic.AddUint64(&l.atomicConnID, 1)
-	sconn, err := newConn(conn, connID, secret, l.config)
+	connID := generateConnID()
+	sconn, err := newConn(conn, connID, secret, config)
 	if err != nil {
-		l.trace("new conn failed: %s", err)
 		conn.Close()
-		return
+		return nil, err
 	}
 
 	binary.LittleEndian.PutUint64(field1, pubKey)
@@ -158,18 +157,15 @@ func (l *Listener) handshake(conn net.Conn) {
 	sconn.writeCipher.XORKeyStream(field2, field2)
 	rand.Read(field3)
 	if _, err := conn.Write(buf[:]); err != nil {
-		l.trace("send handshake response failed: %s", err)
 		conn.Close()
-		return
+		return nil, err
 	}
 
 	// 二次握手
-	l.trace("check twice handshake")
 	var buf2 [16]byte
 	if _, err := io.ReadFull(conn, buf2[:]); err != nil {
-		l.trace("read twice handshake failed: %s", err)
 		conn.Close()
-		return
+		return nil, err
 	}
 
 	hash := md5.New()
@@ -177,13 +173,25 @@ func (l *Listener) handshake(conn net.Conn) {
 	hash.Write(sconn.key[:])
 	md5sum := hash.Sum(nil)
 	if !bytes.Equal(buf2[:], md5sum) {
-		l.trace("twice handshake not equals: %x, %x", buf2[:], md5sum)
+		conn.Close()
+		return nil, fmt.Errorf("twice handshake not equals")
+	}
+
+	return sconn, nil
+}
+
+// handshake 处理新连接的握手
+func (l *Listener) handshake(conn net.Conn) {
+	sconn, err := AcceptOnConn(conn, l.config, func() uint64 {
+		return atomic.AddUint64(&l.atomicConnID, 1)
+	})
+	if err != nil {
+		l.trace("handshake failed: %v", err)
 		conn.Close()
 		return
 	}
-
 	sconn.listener = l
-	l.putConn(connID, sconn)
+	l.putConn(sconn.id, sconn)
 	select {
 	case l.acceptChan <- sconn:
 	case <-l.closeChan:
