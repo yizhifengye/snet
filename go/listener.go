@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	dh64 "github.com/funny/crypto/dh64/go"
+	"github.com/funny/crypto/dh64/go"
 )
 
 var _ net.Listener = &Listener{}
@@ -103,17 +103,7 @@ func (l *Listener) handAccept(conn net.Conn) {
 	case TYPE_RECONN:
 		l.reconn(conn)
 	default:
-		// 兼容非snet的连接
-		// 立即清掉握手超时，避免上层误读超时（defer 还没执行）
-		if l.config.HandshakeTimeout > 0 {
-			conn.SetReadDeadline(time.Time{})
-		}
-		rconn := &rawConn{Conn: conn, prefix: []byte{buf[0]}}
-		select {
-		case l.acceptChan <- rconn:
-		case <-l.closeChan:
-			rconn.Close()
-		}
+		conn.Close()
 	}
 }
 
