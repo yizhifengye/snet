@@ -3,24 +3,39 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/sandwich-go/logbus"
+	"go.uber.org/zap/zapcore"
 )
 
+// initLogger initializes logbus logger with appropriate configuration
+func initLogger() {
+	logbus.Init(logbus.NewConf(
+		logbus.WithCallerSkip(2),
+		logbus.WithDev(true), // Enable development mode for better formatting
+		logbus.WithLogLevel(zapcore.InfoLevel),
+	))
+	logbus.Info("TCP client logger initialized successfully")
+}
+
 func main() {
+	// Initialize logger first
+	initLogger()
+
 	// Connect directly to server using plain TCP
 	conn, err := net.Dial("tcp", "localhost:8080")
 	if err != nil {
-		log.Fatalf("Failed to connect to server: %v", err)
+		logbus.Fatal("Failed to connect to server", logbus.ErrorField(err))
 	}
 	defer conn.Close()
 
-	fmt.Println("Successfully connected to server using plain TCP")
-	fmt.Printf("Local address: %s\n", conn.LocalAddr().String())
-	fmt.Printf("Server address: %s\n", conn.RemoteAddr().String())
+	logbus.Info("Successfully connected to server using plain TCP",
+		logbus.String("local_addr", conn.LocalAddr().String()),
+		logbus.String("server_addr", conn.RemoteAddr().String()))
 
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
@@ -31,7 +46,7 @@ func main() {
 		for {
 			message, err := reader.ReadString('\n')
 			if err != nil {
-				fmt.Printf("Failed to read server message: %v\n", err)
+				logbus.Error("Failed to read server message", logbus.ErrorField(err))
 				return
 			}
 			fmt.Printf("Server: %s", message)
@@ -56,10 +71,14 @@ func main() {
 		// Send message directly as plain text
 		_, err := writer.WriteString(message + "\n")
 		if err != nil {
-			fmt.Printf("Failed to send message: %v\n", err)
+			logbus.Error("Failed to send message",
+				logbus.String("message", message),
+				logbus.ErrorField(err))
 			break
 		}
 		writer.Flush()
+
+		logbus.Debug("Sent message to server", logbus.String("message", message))
 
 		// If it's a quit command, wait for server response then exit
 		if strings.ToLower(strings.TrimSpace(message)) == "quit" ||
@@ -69,5 +88,5 @@ func main() {
 		}
 	}
 
-	fmt.Println("TCP client exiting")
+	logbus.Info("TCP client exiting")
 }

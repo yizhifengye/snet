@@ -4,11 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/sandwich-go/logbus"
+	"go.uber.org/zap/zapcore"
 )
 
 type NetworkProxy struct {
@@ -23,6 +25,16 @@ type NetworkProxy struct {
 
 	connections map[net.Conn]net.Conn
 	mu          sync.Mutex
+}
+
+// initLogger initializes logbus logger with appropriate configuration
+func initLogger() {
+	logbus.Init(logbus.NewConf(
+		logbus.WithCallerSkip(2),
+		logbus.WithDev(true), // Enable development mode for better formatting
+		logbus.WithLogLevel(zapcore.InfoLevel),
+	))
+	logbus.Info("Network proxy logger initialized successfully")
 }
 
 func NewNetworkProxy(listenAddr, targetAddr string) *NetworkProxy {
@@ -53,16 +65,21 @@ func (p *NetworkProxy) Start() error {
 	}
 	defer listener.Close()
 
-	fmt.Printf("Network proxy started on %s -> %s\n", p.listenAddr, p.targetAddr)
-	fmt.Printf("Drop rate: %.2f%%, Delay: %v-%v\n", p.dropRate*100, p.delayMin, p.delayMax)
+	logbus.Info("Network proxy started",
+		logbus.String("listen_addr", p.listenAddr),
+		logbus.String("target_addr", p.targetAddr),
+		logbus.Float64("drop_rate_percent", p.dropRate*100),
+		logbus.Duration("delay_min", p.delayMin),
+		logbus.Duration("delay_max", p.delayMax))
+
 	if p.disconnectAt > 0 {
-		fmt.Printf("Will disconnect after: %v\n", p.disconnectAt)
+		logbus.Info("Automatic disconnect configured", logbus.Duration("disconnect_after", p.disconnectAt))
 	}
 
 	for {
 		clientConn, err := listener.Accept()
 		if err != nil {
-			log.Printf("Failed to accept connection: %v", err)
+			logbus.Error("Failed to accept connection", logbus.ErrorField(err))
 			continue
 		}
 
@@ -76,7 +93,9 @@ func (p *NetworkProxy) handleConnection(clientConn net.Conn) {
 	// Connect to target server
 	serverConn, err := net.Dial("tcp", p.targetAddr)
 	if err != nil {
-		log.Printf("Failed to connect to target %s: %v", p.targetAddr, err)
+		logbus.Error("Failed to connect to target",
+			logbus.String("target_addr", p.targetAddr),
+			logbus.ErrorField(err))
 		return
 	}
 	defer serverConn.Close()
@@ -91,13 +110,17 @@ func (p *NetworkProxy) handleConnection(clientConn net.Conn) {
 		p.mu.Unlock()
 	}()
 
-	fmt.Printf("New connection: %s -> %s\n", clientConn.RemoteAddr(), p.targetAddr)
+	logbus.Info("New connection established",
+		logbus.String("client_addr", clientConn.RemoteAddr().String()),
+		logbus.String("target_addr", p.targetAddr))
 
 	// Set up disconnect timer if specified
 	var disconnectTimer *time.Timer
 	if p.disconnectAt > 0 {
 		disconnectTimer = time.AfterFunc(p.disconnectAt, func() {
-			fmt.Printf("Disconnecting connection after %v\n", p.disconnectAt)
+			logbus.Info("Disconnecting connection due to timer",
+				logbus.String("client_addr", clientConn.RemoteAddr().String()),
+				logbus.Duration("after", p.disconnectAt))
 			clientConn.Close()
 			serverConn.Close()
 		})
@@ -121,7 +144,7 @@ func (p *NetworkProxy) handleConnection(clientConn net.Conn) {
 	}()
 
 	wg.Wait()
-	fmt.Printf("Connection closed: %s\n", clientConn.RemoteAddr())
+	logbus.Info("Connection closed", logbus.String("client_addr", clientConn.RemoteAddr().String()))
 }
 
 func (p *NetworkProxy) proxyData(src, dst net.Conn, direction string) {
@@ -131,14 +154,18 @@ func (p *NetworkProxy) proxyData(src, dst net.Conn, direction string) {
 		n, err := src.Read(buffer)
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("Read error (%s): %v", direction, err)
+				logbus.Debug("Read error",
+					logbus.String("direction", direction),
+					logbus.ErrorField(err))
 			}
 			return
 		}
 
 		// Simulate packet drop
 		if p.dropRate > 0 && rand.Float64() < p.dropRate {
-			fmt.Printf("Dropped packet (%s): %d bytes\n", direction, n)
+			logbus.Debug("Packet dropped",
+				logbus.String("direction", direction),
+				logbus.Int("bytes", n))
 			continue
 		}
 
@@ -153,9 +180,15 @@ func (p *NetworkProxy) proxyData(src, dst net.Conn, direction string) {
 
 		_, err = dst.Write(buffer[:n])
 		if err != nil {
-			log.Printf("Write error (%s): %v", direction, err)
+			logbus.Debug("Write error",
+				logbus.String("direction", direction),
+				logbus.ErrorField(err))
 			return
 		}
+
+		logbus.Debug("Data proxied",
+			logbus.String("direction", direction),
+			logbus.Int("bytes", n))
 	}
 }
 
@@ -170,6 +203,9 @@ func main() {
 	)
 	flag.Parse()
 
+	// Initialize logger first
+	initLogger()
+
 	rand.Seed(time.Now().UnixNano())
 
 	proxy := NewNetworkProxy(*listenAddr, *targetAddr)
@@ -178,6 +214,6 @@ func main() {
 	proxy.SetDisconnectAfter(*disconnectAt)
 
 	if err := proxy.Start(); err != nil {
-		log.Fatalf("Proxy failed: %v", err)
+		logbus.Fatal("Proxy failed", logbus.ErrorField(err))
 	}
 }

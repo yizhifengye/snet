@@ -3,16 +3,31 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/sandwich-go/logbus"
+	"go.uber.org/zap/zapcore"
+
 	snet "github.com/yizhifengye/snet/go"
 )
 
+// initLogger initializes logbus logger with appropriate configuration
+func initLogger() {
+	logbus.Init(logbus.NewConf(
+		logbus.WithCallerSkip(2),
+		logbus.WithDev(true), // Enable development mode for better formatting
+		logbus.WithLogLevel(zapcore.InfoLevel),
+	))
+	logbus.Info("Client logger initialized successfully")
+}
+
 func main() {
+	// Initialize logger first
+	initLogger()
+
 	config := snet.Config{
 		EnableCrypt:        false, // Must match server settings
 		HandshakeTimeout:   time.Second * 10,
@@ -25,13 +40,14 @@ func main() {
 		return net.Dial("tcp", "localhost:8080")
 	})
 	if err != nil {
-		log.Fatalf("Failed to connect to server: %v", err)
+		logbus.Fatal("Failed to connect to server", logbus.ErrorField(err))
 	}
 	defer conn.Close()
 
-	fmt.Println("Successfully connected to SNET server")
-	fmt.Printf("Local address: %s\n", conn.LocalAddr().String())
-	fmt.Printf("Server address: %s\n", conn.RemoteAddr().String())
+	logbus.Info("Successfully connected to SNET server",
+		logbus.String("local_addr", conn.LocalAddr().String()),
+		logbus.String("server_addr", conn.RemoteAddr().String()),
+		logbus.Bool("encryption", config.EnableCrypt))
 
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
@@ -42,7 +58,7 @@ func main() {
 		for {
 			message, err := reader.ReadString('\n')
 			if err != nil {
-				fmt.Printf("Failed to read server message: %v\n", err)
+				logbus.Error("Failed to read server message", logbus.ErrorField(err))
 				return
 			}
 			fmt.Printf("Server: %s", message)
@@ -66,10 +82,14 @@ func main() {
 		// Send message
 		_, err := writer.WriteString(message + "\n")
 		if err != nil {
-			fmt.Printf("Failed to send message: %v\n", err)
+			logbus.Error("Failed to send message",
+				logbus.String("message", message),
+				logbus.ErrorField(err))
 			break
 		}
 		writer.Flush()
+
+		logbus.Debug("Sent message to server", logbus.String("message", message))
 
 		// If it's a quit command, wait for server response then exit
 		if strings.ToLower(strings.TrimSpace(message)) == "quit" ||
@@ -79,5 +99,5 @@ func main() {
 		}
 	}
 
-	fmt.Println("Client exiting")
+	logbus.Info("Client exiting")
 }
