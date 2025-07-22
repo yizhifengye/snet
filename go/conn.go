@@ -59,6 +59,8 @@ type Conn struct {
 }
 
 func Dial(config Config, dialer Dialer) (net.Conn, error) {
+	InitLogbus() // Initialize logbus when starting client
+
 	conn, err := dialer()
 	if err != nil {
 		return nil, err

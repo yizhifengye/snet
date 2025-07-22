@@ -29,6 +29,8 @@ type Listener struct {
 }
 
 func Listen(config Config, listenFunc func() (net.Listener, error)) (*Listener, error) {
+	InitLogbus() // Initialize logbus when starting server
+
 	listener, err := listenFunc()
 	if err != nil {
 		return nil, err
