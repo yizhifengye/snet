@@ -373,17 +373,19 @@ func (c *Conn) handleReconn(conn net.Conn, writeCount, readCount uint64) {
 		field3 = buf[16:24]
 	)
 
-	if writeCount < c.readCount || c.writeCount < readCount ||
+	// Include cached data in effective readCount for validation
+	effectiveReadCount := c.readCount + c.rereader.count
+	if writeCount < effectiveReadCount || c.writeCount < readCount ||
 		int(c.writeCount-readCount) > len(c.rewriter.data) {
-		c.trace("data corruption(\"%s\", %d, %d), c.writeCount = %d, c.readCount = %d",
-			conn.RemoteAddr(), writeCount, readCount, c.writeCount, c.readCount)
+		c.trace("data corruption(\"%s\", %d, %d), c.writeCount = %d, c.readCount = %d, effective = %d",
+			conn.RemoteAddr(), writeCount, readCount, c.writeCount, c.readCount, effectiveReadCount)
 
 		conn.Write(buf[:])
 		return
 	}
 
 	binary.LittleEndian.PutUint64(field1, c.writeCount)
-	binary.LittleEndian.PutUint64(field2, c.readCount)
+	binary.LittleEndian.PutUint64(field2, effectiveReadCount)
 	rand.Read(field3)
 	if _, err := conn.Write(buf[:]); err != nil {
 		c.trace("reconn response failed")
@@ -507,7 +509,9 @@ func (c *Conn) tryReconn(badConn net.Conn) {
 			continue
 		}
 
-		if writeCount < c.readCount || c.writeCount < readCount ||
+		// Include cached data in effective readCount for validation
+		effectiveReadCount := c.readCount + c.rereader.count
+		if writeCount < effectiveReadCount || c.writeCount < readCount ||
 			int(c.writeCount-readCount) > len(c.rewriter.data) {
 			c.trace("Data corruption, cannot be reconnected")
 			conn.Close()
@@ -525,18 +529,19 @@ func (c *Conn) tryReconn(badConn net.Conn) {
 }
 
 func (c *Conn) doReconn(conn net.Conn, writeCount, readCount uint64) bool {
+	effectiveReadCount := c.readCount + c.rereader.count
 	c.trace(
-		"doReconn(\"%s\", %d, %d), c.writeCount = %d, c.readCount = %d",
-		conn.RemoteAddr(), writeCount, readCount, c.writeCount, c.readCount,
+		"doReconn(\"%s\", %d, %d), c.writeCount = %d, c.readCount = %d, effective = %d",
+		conn.RemoteAddr(), writeCount, readCount, c.writeCount, c.readCount, effectiveReadCount,
 	)
 
 	rereadWaitChan := make(chan bool)
-	if writeCount != c.readCount {
+	if writeCount != effectiveReadCount {
 		go func() {
-			n := int(writeCount) - int(c.readCount)
+			n := int(writeCount) - int(effectiveReadCount)
 			c.trace(
-				"reread, writeCount = %d, c.readCount = %d, n = %d",
-				writeCount, c.readCount, n,
+				"reread, writeCount = %d, effectiveReadCount = %d, n = %d",
+				writeCount, effectiveReadCount, n,
 			)
 			rereadWaitChan <- c.rereader.Reread(conn, n)
 		}()
@@ -554,7 +559,7 @@ func (c *Conn) doReconn(conn net.Conn, writeCount, readCount uint64) bool {
 		c.trace("rewrite done")
 	}
 
-	if writeCount != c.readCount {
+	if writeCount != effectiveReadCount {
 		c.trace("reread wait")
 		if !<-rereadWaitChan {
 			c.trace("reread failed")
