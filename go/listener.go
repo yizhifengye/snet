@@ -24,7 +24,7 @@ type Listener struct {
 	closeOnce    sync.Once
 	closeChan    chan struct{}
 	atomicConnID uint64
-	connsMutex   sync.Mutex
+	connsMutex   sync.RWMutex
 	conns        map[uint64]*Conn
 }
 
@@ -126,8 +126,8 @@ func (l *Listener) reconn(conn net.Conn) {
 }
 
 func (l *Listener) getConn(id uint64) (*Conn, bool) {
-	l.connsMutex.Lock()
-	defer l.connsMutex.Unlock()
+	l.connsMutex.RLock()
+	defer l.connsMutex.RUnlock()
 	conn, exists := l.conns[id]
 	return conn, exists
 }
