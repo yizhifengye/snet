@@ -359,25 +359,34 @@ func handShakeTest(t *testing.T, errType int) {
 	defer conn.Close()
 
 	var (
-		preBuf [1]byte
+		preBuf [4]byte
 		buf    [24]byte
 		field1 = buf[0:8]
 		field2 = buf[8:16]
 		field3 = buf[16:24]
 	)
-	preBuf[0] = TYPE_NEWCONN
+	binary.LittleEndian.PutUint32(preBuf[:], TYPE_NEWCONN)
 	if errType == 1 {
 		conn.Close()
 		return
 	}
-	// 测试错误连接类型
+	// 测试TCP兼容性 - 发送非snet协议数据，应该被接受为rawConn
 	if errType == 2 {
-		preBuf[0] = byte(1)
+		binary.LittleEndian.PutUint32(preBuf[:], uint32(1))
 	}
 
 	if n, err := conn.Write(preBuf[:]); n != len(preBuf) || err != nil {
 		t.Fatalf("write pre request failed: %s", err.Error())
 	}
+
+	// 对于TCP兼容性测试，连接应该被接受，直接返回
+	if errType == 2 {
+		time.Sleep(100 * time.Millisecond) // 等待服务器处理
+		conn.Close()
+		listener.Close()
+		return
+	}
+
 	// 测试不上传公钥
 	if errType == 3 {
 		conn.Close()

@@ -1,6 +1,7 @@
 package snet
 
 import (
+	"encoding/binary"
 	"io"
 	"net"
 	"os"
@@ -12,8 +13,8 @@ import (
 var _ net.Listener = &Listener{}
 
 const (
-	TYPE_NEWCONN byte = 0x00
-	TYPE_RECONN  byte = 0xFF
+	TYPE_NEWCONN uint32 = 0x00000000
+	TYPE_RECONN  uint32 = 0xFFFFFFFF
 )
 
 type Listener struct {
@@ -81,7 +82,7 @@ func (l *Listener) acceptLoop() {
 }
 
 func (l *Listener) handAccept(conn net.Conn) {
-	var buf [1]byte
+	var buf [4]byte
 	if l.config.HandshakeTimeout > 0 {
 		conn.SetReadDeadline(time.Now().Add(l.config.HandshakeTimeout))
 		defer conn.SetReadDeadline(time.Time{})
@@ -92,13 +93,24 @@ func (l *Listener) handAccept(conn net.Conn) {
 		return
 	}
 
-	switch buf[0] {
+	protocolType := binary.LittleEndian.Uint32(buf[:])
+	switch protocolType {
 	case TYPE_NEWCONN:
 		l.handshake(conn)
 	case TYPE_RECONN:
 		l.reconn(conn)
 	default:
-		conn.Close()
+		// 兼容非snet的连接
+		// 立即清掉握手超时，避免上层误读超时（defer 还没执行）
+		if l.config.HandshakeTimeout > 0 {
+			conn.SetReadDeadline(time.Time{})
+		}
+		rconn := &rawConn{Conn: conn, prefix: buf[:]}
+		select {
+		case l.acceptChan <- rconn:
+		case <-l.closeChan:
+			rconn.Close()
+		}
 	}
 }
 

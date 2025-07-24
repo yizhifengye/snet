@@ -73,13 +73,13 @@ func Dial(config Config, dialer Dialer) (net.Conn, error) {
 	}
 
 	var (
-		preBuf [1]byte
+		preBuf [4]byte
 		buf    [24]byte
 		field1 = buf[0:8]
 		field2 = buf[8:16]
 		field3 = buf[16:24]
 	)
-	preBuf[0] = TYPE_NEWCONN
+	binary.LittleEndian.PutUint32(preBuf[:], TYPE_NEWCONN)
 	if _, err := conn.Write(preBuf[:]); err != nil {
 		return nil, err
 	}
@@ -449,13 +449,13 @@ func (c *Conn) tryReconn(badConn net.Conn) {
 	}
 
 	var (
-		preBuf [1]byte
+		preBuf [4]byte
 		buf    [24 + md5.Size]byte
 		buf2   [24]byte
 		buf3   [md5.Size]byte
 	)
 
-	preBuf[0] = TYPE_RECONN
+	binary.LittleEndian.PutUint32(preBuf[:], TYPE_RECONN)
 	binary.LittleEndian.PutUint64(buf[0:8], c.id)
 	binary.LittleEndian.PutUint64(buf[8:16], c.writeCount)
 	binary.LittleEndian.PutUint64(buf[16:24], c.readCount)
