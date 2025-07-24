@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	dh64 "github.com/funny/crypto/dh64/go"
@@ -51,6 +52,11 @@ type Conn struct {
 	readWaitChan      chan struct{}
 	writeWaitChan     chan struct{}
 	reconnWaitTimeout time.Duration
+
+	// Cache deadline states for reconnection
+	cachedDeadline      atomic.Value // time.Time
+	cachedReadDeadline  atomic.Value // time.Time
+	cachedWriteDeadline atomic.Value // time.Time
 
 	rewriter   rewriter
 	rereader   rereader
@@ -159,18 +165,21 @@ func (c *Conn) LocalAddr() net.Addr {
 }
 
 func (c *Conn) SetDeadline(t time.Time) error {
+	c.cachedDeadline.Store(t)
 	c.reconnMutex.RLock()
 	defer c.reconnMutex.RUnlock()
 	return c.base.SetDeadline(t)
 }
 
 func (c *Conn) SetReadDeadline(t time.Time) error {
+	c.cachedReadDeadline.Store(t)
 	c.reconnMutex.RLock()
 	defer c.reconnMutex.RUnlock()
 	return c.base.SetReadDeadline(t)
 }
 
 func (c *Conn) SetWriteDeadline(t time.Time) error {
+	c.cachedWriteDeadline.Store(t)
 	c.reconnMutex.RLock()
 	defer c.reconnMutex.RUnlock()
 	return c.base.SetWriteDeadline(t)
@@ -569,7 +578,23 @@ func (c *Conn) doReconn(conn net.Conn, writeCount, readCount uint64) bool {
 	}
 
 	c.base = conn
+
+	// Restore cached deadlines
+	c.restoreCachedDeadlines()
+
 	return true
+}
+
+func (c *Conn) restoreCachedDeadlines() {
+	if t, ok := c.cachedDeadline.Load().(time.Time); ok && !t.IsZero() {
+		c.base.SetDeadline(t)
+	}
+	if t, ok := c.cachedReadDeadline.Load().(time.Time); ok && !t.IsZero() {
+		c.base.SetReadDeadline(t)
+	}
+	if t, ok := c.cachedWriteDeadline.Load().(time.Time); ok && !t.IsZero() {
+		c.base.SetWriteDeadline(t)
+	}
 }
 
 func (c *Conn) wakeUp(readWaiting, writeWaiting bool) {
