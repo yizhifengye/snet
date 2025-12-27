@@ -1,3 +1,4 @@
+//go:build ignore
 // +build ignore
 
 package main
@@ -9,10 +10,11 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	snet "github.com/funny/snet/go"
 	"strconv"
 	"syscall"
 	"time"
+
+	snet "github.com/yizhifengye/snet/go"
 )
 
 func main() {

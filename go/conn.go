@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	dh64 "github.com/funny/crypto/dh64/go"
@@ -52,6 +53,11 @@ type Conn struct {
 	writeWaitChan     chan struct{}
 	reconnWaitTimeout time.Duration
 
+	// Cache deadline states for reconnection
+	cachedDeadline      atomic.Value // time.Time
+	cachedReadDeadline  atomic.Value // time.Time
+	cachedWriteDeadline atomic.Value // time.Time
+
 	rewriter   rewriter
 	rereader   rereader
 	readCount  uint64
@@ -59,6 +65,8 @@ type Conn struct {
 }
 
 func Dial(config Config, dialer Dialer) (net.Conn, error) {
+	InitLogbus() // Initialize logbus when starting client
+
 	conn, err := dialer()
 	if err != nil {
 		return nil, err
@@ -157,18 +165,21 @@ func (c *Conn) LocalAddr() net.Addr {
 }
 
 func (c *Conn) SetDeadline(t time.Time) error {
+	c.cachedDeadline.Store(t)
 	c.reconnMutex.RLock()
 	defer c.reconnMutex.RUnlock()
 	return c.base.SetDeadline(t)
 }
 
 func (c *Conn) SetReadDeadline(t time.Time) error {
+	c.cachedReadDeadline.Store(t)
 	c.reconnMutex.RLock()
 	defer c.reconnMutex.RUnlock()
 	return c.base.SetReadDeadline(t)
 }
 
 func (c *Conn) SetWriteDeadline(t time.Time) error {
+	c.cachedWriteDeadline.Store(t)
 	c.reconnMutex.RLock()
 	defer c.reconnMutex.RUnlock()
 	return c.base.SetWriteDeadline(t)
@@ -188,6 +199,16 @@ func (c *Conn) Close() error {
 		close(c.closeChan)
 	})
 	return c.base.Close()
+}
+
+// ID returns the connection ID
+func (c *Conn) ID() uint64 {
+	return c.id
+}
+
+// CloseChan returns the close channel
+func (c *Conn) CloseChan() <-chan struct{} {
+	return c.closeChan
 }
 
 func (c *Conn) TryReconn() {
@@ -361,17 +382,19 @@ func (c *Conn) handleReconn(conn net.Conn, writeCount, readCount uint64) {
 		field3 = buf[16:24]
 	)
 
-	if writeCount < c.readCount || c.writeCount < readCount ||
+	// Include cached data in effective readCount for validation
+	effectiveReadCount := c.readCount + c.rereader.count
+	if writeCount < effectiveReadCount || c.writeCount < readCount ||
 		int(c.writeCount-readCount) > len(c.rewriter.data) {
-		c.trace("data corruption(\"%s\", %d, %d), c.writeCount = %d, c.readCount = %d",
-			conn.RemoteAddr(), writeCount, readCount, c.writeCount, c.readCount)
+		c.trace("data corruption(\"%s\", %d, %d), c.writeCount = %d, c.readCount = %d, effective = %d",
+			conn.RemoteAddr(), writeCount, readCount, c.writeCount, c.readCount, effectiveReadCount)
 
 		conn.Write(buf[:])
 		return
 	}
 
 	binary.LittleEndian.PutUint64(field1, c.writeCount)
-	binary.LittleEndian.PutUint64(field2, c.readCount)
+	binary.LittleEndian.PutUint64(field2, effectiveReadCount)
 	rand.Read(field3)
 	if _, err := conn.Write(buf[:]); err != nil {
 		c.trace("reconn response failed")
@@ -495,7 +518,9 @@ func (c *Conn) tryReconn(badConn net.Conn) {
 			continue
 		}
 
-		if writeCount < c.readCount || c.writeCount < readCount ||
+		// Include cached data in effective readCount for validation
+		effectiveReadCount := c.readCount + c.rereader.count
+		if writeCount < effectiveReadCount || c.writeCount < readCount ||
 			int(c.writeCount-readCount) > len(c.rewriter.data) {
 			c.trace("Data corruption, cannot be reconnected")
 			conn.Close()
@@ -513,18 +538,19 @@ func (c *Conn) tryReconn(badConn net.Conn) {
 }
 
 func (c *Conn) doReconn(conn net.Conn, writeCount, readCount uint64) bool {
+	effectiveReadCount := c.readCount + c.rereader.count
 	c.trace(
-		"doReconn(\"%s\", %d, %d), c.writeCount = %d, c.readCount = %d",
-		conn.RemoteAddr(), writeCount, readCount, c.writeCount, c.readCount,
+		"doReconn(\"%s\", %d, %d), c.writeCount = %d, c.readCount = %d, effective = %d",
+		conn.RemoteAddr(), writeCount, readCount, c.writeCount, c.readCount, effectiveReadCount,
 	)
 
 	rereadWaitChan := make(chan bool)
-	if writeCount != c.readCount {
+	if writeCount != effectiveReadCount {
 		go func() {
-			n := int(writeCount) - int(c.readCount)
+			n := int(writeCount) - int(effectiveReadCount)
 			c.trace(
-				"reread, writeCount = %d, c.readCount = %d, n = %d",
-				writeCount, c.readCount, n,
+				"reread, writeCount = %d, effectiveReadCount = %d, n = %d",
+				writeCount, effectiveReadCount, n,
 			)
 			rereadWaitChan <- c.rereader.Reread(conn, n)
 		}()
@@ -542,7 +568,7 @@ func (c *Conn) doReconn(conn net.Conn, writeCount, readCount uint64) bool {
 		c.trace("rewrite done")
 	}
 
-	if writeCount != c.readCount {
+	if writeCount != effectiveReadCount {
 		c.trace("reread wait")
 		if !<-rereadWaitChan {
 			c.trace("reread failed")
@@ -552,7 +578,23 @@ func (c *Conn) doReconn(conn net.Conn, writeCount, readCount uint64) bool {
 	}
 
 	c.base = conn
+
+	// Restore cached deadlines
+	c.restoreCachedDeadlines()
+
 	return true
+}
+
+func (c *Conn) restoreCachedDeadlines() {
+	if t, ok := c.cachedDeadline.Load().(time.Time); ok && !t.IsZero() {
+		c.base.SetDeadline(t)
+	}
+	if t, ok := c.cachedReadDeadline.Load().(time.Time); ok && !t.IsZero() {
+		c.base.SetReadDeadline(t)
+	}
+	if t, ok := c.cachedWriteDeadline.Load().(time.Time); ok && !t.IsZero() {
+		c.base.SetWriteDeadline(t)
+	}
 }
 
 func (c *Conn) wakeUp(readWaiting, writeWaiting bool) {
